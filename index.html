@@ -20,6 +20,7 @@ button.active{background:#4a90d9;border-color:#4a90d9;color:#fff;}
 .res{display:flex;gap:10px;flex-wrap:wrap;}
 .res span{white-space:nowrap;}
 .res b{margin-left:2px;color:#ffd54f;font-weight:600;}
+.res b.bad{color:#ff5050;}
 #tickInfo{color:#888;font-size:11px;}
 #dayInfo{color:#ffd54f;font-size:12px;font-weight:600;}
 #canvasWrap{flex:1 1 auto;position:relative;overflow:hidden;}
@@ -70,8 +71,8 @@ canvas{display:block;width:100%;height:100%;touch-action:none;}
       <div class="row res">
         <span>💰<b id="rMoney">0</b></span>
         <span>👥<b id="rPop">0</b></span>
-        <span>⚡<b id="rPower">0</b></span>
-        <span>💧<b id="rWater">0</b></span>
+        <span>⚡<b id="rPower">0/0</b></span>
+        <span>💧<b id="rWater">0/0</b></span>
         <span>📦<b id="rGoods">0</b></span>
       </div>
     </div>
@@ -107,19 +108,30 @@ const N = 10;
 const CELL = 60;
 const ROAD_WIDTH = 9;
 const AGENT_RADIUS = 5;
-const AGENT_SPEED = 90;           // 世界单位/秒
-const MAX_AGENTS = 200;
-const DAY_LENGTH = 10;
-const MORNING_END = 5;
+const AGENT_SPEED = 90;            // 世界单位/秒
+const MAX_AGENTS = 400;
+const DAY_LENGTH = 48;             // 一天 48 tick
+const MORNING_END = 33;            // 早上 tick 1..33，晚上 34..48
+const MORNING_SPAWN_TICKS = 3;     // 早上头 3 tick 派工
+const EVENING_HOME_TICKS = 3;      // 晚上头 3 tick 下班
 const SAVE_KEY = 'minicity_v2';
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
+// 产能 / 消耗
+const WATER_PER_PLANT_PER_TICK = 5;
+const POWER_PER_PLANT_PER_TICK = 6;
+const WATER_PER_HOUSE_PER_TICK  = 0.2;
+const POWER_PER_HOUSE_PER_TICK  = 0.25;
+const WATER_PER_IND_PER_TICK    = 0.8;
+const POWER_PER_IND_PER_TICK    = 1.2;
+const GOODS_VALUE = 20;
+
 const BUILDINGS = {
-  house:    { name:'住宅', short:'住', color:'#4a90d9', cost:100, powerNeed:1, waterNeed:1 },
-  industry: { name:'工业', short:'工', color:'#8d6e63', cost:150, powerNeed:2, waterNeed:2 },
-  power:    { name:'电厂', short:'电', color:'#e74c3c', cost:200, powerNeed:0, waterNeed:0, powerProd:20 },
-  water:    { name:'水厂', short:'水', color:'#26c6da', cost:200, powerNeed:0, waterNeed:0, waterProd:20 },
-  trade:    { name:'贸易', short:'贸', color:'#9b59b6', cost:250, powerNeed:1, waterNeed:0 },
+  house:    { name:'住宅', short:'住', color:'#4a90d9', cost:100, workerCap:0, residentCap:4 },
+  industry: { name:'工业', short:'工', color:'#8d6e63', cost:150, workerCap:6 },
+  power:    { name:'电厂', short:'电', color:'#e74c3c', cost:200, workerCap:1 },
+  water:    { name:'水厂', short:'水', color:'#26c6da', cost:200, workerCap:1 },
+  trade:    { name:'贸易', short:'贸', color:'#9b59b6', cost:250, workerCap:1, goodsPerTick:2 },
 };
 
 const TOOLS = ['road','house','industry','power','water','trade','demolish'];
@@ -135,10 +147,23 @@ const state = {
   edgesV: [],
   agents: [],
   nextId: 1,
-  cellPower: new Set(),
-  cellWater: new Set(),
-  industryWorkers: {},
+  waterSupply: 0, powerSupply: 0,
+  waterDemand: 0, powerDemand: 0,
+  waterOK: true, powerOK: true,
 };
+
+function initCellRuntime(cell){
+  if(!cell) return;
+  if(cell.type === 'house'){
+    cell.residents = BUILDINGS.house.residentCap;
+    cell.outCount = 0;
+  } else {
+    cell.workers = 0;
+    cell.pendingIn = 0;
+    cell.workerHomes = [];
+    if(cell.type === 'trade') cell.goodsQueue = 0;
+  }
+}
 
 function resetState(){
   state.money = 1500;
@@ -150,9 +175,9 @@ function resetState(){
   state.edgesV = Array.from({length:N}, () => Array(N+1).fill(false));
   state.agents = [];
   state.nextId = 1;
-  state.cellPower = new Set();
-  state.cellWater = new Set();
-  state.industryWorkers = {};
+  state.waterSupply = 0; state.powerSupply = 0;
+  state.waterDemand = 0; state.powerDemand = 0;
+  state.waterOK = true; state.powerOK = true;
 }
 resetState();
 
@@ -162,11 +187,13 @@ function hasSave(){
 }
 function save(){
   try {
+    const cellsData = state.cells.map(row =>
+      row.map(cell => cell ? { type: cell.type } : null)
+    );
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       money: state.money, tick: state.tick,
-      cells: state.cells,
+      cells: cellsData,
       edgesH: state.edgesH, edgesV: state.edgesV,
-      industryWorkers: state.industryWorkers,
     }));
   } catch(e){}
 }
@@ -180,14 +207,16 @@ function load(){
     state.cells = d.cells || Array.from({length:N}, () => Array(N).fill(null));
     state.edgesH = d.edgesH || Array.from({length:N+1}, () => Array(N).fill(false));
     state.edgesV = d.edgesV || Array.from({length:N}, () => Array(N+1).fill(false));
-    state.industryWorkers = d.industryWorkers || {};
     if(state.cells.length !== N) resetState();
     if(state.edgesH.length !== N+1) state.edgesH = Array.from({length:N+1}, () => Array(N).fill(false));
     if(state.edgesV.length !== N) state.edgesV = Array.from({length:N}, () => Array(N+1).fill(false));
+    for(let r = 0; r < N; r++){
+      for(let c = 0; c < N; c++){
+        if(state.cells[r][c]) initCellRuntime(state.cells[r][c]);
+      }
+    }
     state.agents = [];
     state.nextId = 1;
-    state.cellPower = new Set();
-    state.cellWater = new Set();
     return true;
   } catch(e){ return false; }
 }
@@ -235,7 +264,6 @@ function cellFromWorld(wx, wy){
   return [r, c];
 }
 
-// 返回最近的边（H 或 V），带距离
 function edgeFromWorld(wx, wy){
   const hRow = Math.round(wy / CELL);
   const hCol = Math.floor(wx / CELL);
@@ -321,41 +349,15 @@ function nodesToEdges(nodes){
   return edges;
 }
 
-// ========== 网络 BFS（电/水） ==========
-function computeNetwork(plants){
-  const visited = new Set();
-  const queue = [];
-  for(const [r, c] of plants){
-    for(const [nr, nc] of cellEntryNodes(r, c)){
-      const k = nr+','+nc;
-      if(!visited.has(k)){ visited.add(k); queue.push([nr, nc]); }
-    }
-  }
-  while(queue.length > 0){
-    const [r, c] = queue.shift();
-    for(const [nr, nc] of nodeNeighbors(r, c)){
-      const k = nr+','+nc;
-      if(!visited.has(k)){ visited.add(k); queue.push([nr, nc]); }
-    }
-  }
-  return visited;
-}
-
-function cellHasAnyEntryIn(r, c, nodeSet){
-  for(const [nr, nc] of cellEntryNodes(r, c)){
-    if(nodeSet.has(nr+','+nc)) return true;
-  }
-  return false;
-}
-
 // ========== Agent ==========
-function spawnAgent(kind, fromCell, toCell){
+function spawnAgent(kind, fromCell, toCell, homeKey){
   if(state.agents.length >= MAX_AGENTS) return false;
   const nodePath = findPathBetweenCells(fromCell, toCell);
   if(!nodePath || nodePath.length < 2) return false;
   state.agents.push({
     id: state.nextId++,
     kind: kind,
+    homeKey: homeKey || null,
     path: nodesToEdges(nodePath),
     pathIndex: 0,
     progress: 0,
@@ -365,11 +367,20 @@ function spawnAgent(kind, fromCell, toCell){
 }
 
 function onAgentArrive(a){
+  const [r, c] = a.destCell;
+  const cell = state.cells[r] && state.cells[r][c];
+  if(!cell) return;
   if(a.kind === 'worker'){
-    const key = a.destCell[0] + ',' + a.destCell[1];
-    state.industryWorkers[key] = (state.industryWorkers[key] || 0) + 1;
+    cell.workers = (cell.workers || 0) + 1;
+    if(a.homeKey) cell.workerHomes.push(a.homeKey);
+  } else if(a.kind === 'home'){
+    if(cell.type === 'house'){
+      cell.outCount = Math.max(0, (cell.outCount || 0) - 1);
+    }
   } else if(a.kind === 'goods'){
-    state.money += 20;
+    if(cell.type === 'trade'){
+      cell.goodsQueue = (cell.goodsQueue || 0) + 1;
+    }
   }
 }
 
@@ -396,103 +407,129 @@ function updateAgents(dt){
   }
 }
 
-// ========== Tick ==========
-// [FIX1] 早上判定改为 tick 1..5 为早、6..10 为晚
-function isMorning(){
-  const t = (state.tick - 1 + DAY_LENGTH) % DAY_LENGTH;
-  return t < MORNING_END;
+// ========== 时间 ==========
+function currentDayTick(){
+  if(state.tick === 0) return 1;
+  return ((state.tick - 1) % DAY_LENGTH) + 1;
+}
+function isMorningNow(){
+  return currentDayTick() <= MORNING_END;
 }
 
+// ========== Tick ==========
 function tick(){
+  const dayTick = (state.tick % DAY_LENGTH) + 1;   // 即将进入的 dayTick
   state.tick++;
+  const isMorning = dayTick <= MORNING_END;
 
-  const powerPlants = [];
-  const waterPlants = [];
-  const houses = [];
-  const industries = [];
-  const trades = [];
-
+  // 收集
+  const houses = [], industries = [], powers = [], waters = [], trades = [];
+  const allWork = []; // [r,c,cell]
   for(let r = 0; r < N; r++){
     for(let c = 0; c < N; c++){
       const cell = state.cells[r][c];
       if(!cell) continue;
-      if(cell.type === 'power') powerPlants.push([r,c]);
-      else if(cell.type === 'water') waterPlants.push([r,c]);
-      else if(cell.type === 'house') houses.push([r,c]);
-      else if(cell.type === 'industry') industries.push([r,c]);
-      else if(cell.type === 'trade') trades.push([r,c]);
+      switch(cell.type){
+        case 'house':    houses.push([r,c,cell]); break;
+        case 'industry': industries.push([r,c,cell]); allWork.push([r,c,cell]); break;
+        case 'power':    powers.push([r,c,cell]);     allWork.push([r,c,cell]); break;
+        case 'water':    waters.push([r,c,cell]);     allWork.push([r,c,cell]); break;
+        case 'trade':    trades.push([r,c,cell]);     allWork.push([r,c,cell]); break;
+      }
     }
   }
 
-  const powerNodes = computeNetwork(powerPlants);
-  const waterNodes = computeNetwork(waterPlants);
-
-  state.cellPower = new Set();
-  state.cellWater = new Set();
+  // 重算 pendingIn（每 tick 从 agents 推导，避免路断时容量卡死）
   for(let r = 0; r < N; r++){
     for(let c = 0; c < N; c++){
-      if(!state.cells[r][c]) continue;
-      const key = r+','+c;
-      if(cellHasAnyEntryIn(r, c, powerNodes)) state.cellPower.add(key);
-      if(cellHasAnyEntryIn(r, c, waterNodes)) state.cellWater.add(key);
+      const cell = state.cells[r][c];
+      if(cell && cell.type !== 'house') cell.pendingIn = 0;
+    }
+  }
+  for(const a of state.agents){
+    if(a.kind === 'worker'){
+      const cell = state.cells[a.destCell[0]] && state.cells[a.destCell[0]][a.destCell[1]];
+      if(cell) cell.pendingIn = (cell.pendingIn || 0) + 1;
     }
   }
 
-  state.money -= powerPlants.length * 3;
-  state.money -= waterPlants.length * 2;
+  // 资源结算（基于当前到岗 workers）
+  let ws = 0, ps = 0, wd = 0, pd = 0;
+  for(const [, , p] of powers) if(p.workers > 0) ps += POWER_PER_PLANT_PER_TICK;
+  for(const [, , w] of waters) if(w.workers > 0) ws += WATER_PER_PLANT_PER_TICK;
+  for(const [, , h] of houses){ wd += WATER_PER_HOUSE_PER_TICK; pd += POWER_PER_HOUSE_PER_TICK; }
+  for(const [, , ind] of industries){
+    if(ind.workers > 0){ wd += WATER_PER_IND_PER_TICK; pd += POWER_PER_IND_PER_TICK; }
+  }
+  state.waterSupply = ws; state.powerSupply = ps;
+  state.waterDemand = wd; state.powerDemand = pd;
+  state.waterOK = ws >= wd - 1e-9;
+  state.powerOK = ps >= pd - 1e-9;
+
+  // 早上头 3 tick：住宅派工（不受资源限制，避免初始死锁）
+  if(isMorning && dayTick <= MORNING_SPAWN_TICKS){
+    for(const [r, c, h] of houses){
+      let toSend = (h.residents || 0) - (h.outCount || 0);
+      while(toSend > 0){
+        let best = null, bestD = Infinity;
+        for(const [wr, wc, w] of allWork){
+          const cap = BUILDINGS[w.type].workerCap;
+          if(cap <= 0) continue;
+          if((w.workers || 0) + (w.pendingIn || 0) >= cap) continue;
+          const d = Math.abs(wr - r) + Math.abs(wc - c);
+          if(d < bestD){ bestD = d; best = [wr, wc, w]; }
+        }
+        if(!best) break;
+        const [wr, wc, w] = best;
+        if(spawnAgent('worker', [r, c], [wr, wc], r+','+c)){
+          h.outCount = (h.outCount || 0) + 1;
+          toSend--;
+        } else break;
+      }
+    }
+  }
+
+  // 晚上头 3 tick：下班回家
+  if(!isMorning && (dayTick - MORNING_END) <= EVENING_HOME_TICKS){
+    for(const [r, c, w] of allWork){
+      while((w.workers || 0) > 0 && w.workerHomes.length > 0){
+        const homeKey = w.workerHomes.pop();
+        const [hr, hc] = homeKey.split(',').map(Number);
+        w.workers--;
+        spawnAgent('home', [r, c], [hr, hc], homeKey);
+      }
+    }
+  }
+
+  // 工业产货（有人 + 资源充足 + 有贸易站）
+  if(state.waterOK && state.powerOK && trades.length > 0){
+    for(const [r, c, ind] of industries){
+      if((ind.workers || 0) <= 0) continue;
+      let best = null, bestD = Infinity;
+      for(const [tr, tc, t] of trades){
+        const d = Math.abs(tr - r) + Math.abs(tc - c);
+        if(d < bestD){ bestD = d; best = [tr, tc, t]; }
+      }
+      if(best) spawnAgent('goods', [r, c], [best[0], best[1]], null);
+    }
+  }
+
+  // 贸易站处理货物（有人才处理）
+  for(const [, , t] of trades){
+    if((t.workers || 0) <= 0) continue;
+    const process = Math.min(t.goodsQueue || 0, BUILDINGS.trade.goodsPerTick);
+    if(process > 0){
+      t.goodsQueue -= process;
+      state.money += process * GOODS_VALUE;
+    }
+  }
+
+  // 维护费
+  state.money -= powers.length * 3;
+  state.money -= waters.length * 2;
   state.money -= trades.length * 2;
 
-  // 早上：住宅派工人（只派往有电有水的工业）
-  if(isMorning() && state.tick % 3 === 0){
-    for(const [r, c] of houses){
-      const key = r+','+c;
-      if(!state.cellPower.has(key) || !state.cellWater.has(key)) continue;
-      if(industries.length === 0) continue;
-      let best = null, bestD = Infinity;
-      for(const ind of industries){
-        const indKey = ind[0]+','+ind[1];
-        // [FIX2] 工业必须通电通水才接工
-        if(!state.cellPower.has(indKey) || !state.cellWater.has(indKey)) continue;
-        const d = Math.abs(ind[0]-r) + Math.abs(ind[1]-c);
-        if(d < bestD){ bestD = d; best = ind; }
-      }
-      if(best) spawnAgent('worker', [r,c], best);
-    }
-  }
-
-  // 晚上：工业送工人回家
-  if(!isMorning() && state.tick % 3 === 0){
-    for(const [r, c] of industries){
-      const key = r+','+c;
-      if((state.industryWorkers[key] || 0) <= 0) continue;
-      if(houses.length === 0) continue;
-      let best = null, bestD = Infinity;
-      for(const h of houses){
-        const d = Math.abs(h[0]-r) + Math.abs(h[1]-c);
-        if(d < bestD){ bestD = d; best = h; }
-      }
-      // [FIX3] 先成功 spawn 再扣工人数，避免路断时工人凭空消失
-      if(best && spawnAgent('workerHome', [r,c], best)){
-        state.industryWorkers[key]--;
-      }
-    }
-  }
-
-  // 工业：有工人在岗 + 电 + 水 → 每 tick 产 1 个货物
-  for(const [r, c] of industries){
-    const key = r+','+c;
-    if((state.industryWorkers[key] || 0) <= 0) continue;
-    if(!state.cellPower.has(key) || !state.cellWater.has(key)) continue;
-    if(trades.length === 0) continue;
-    let best = null, bestD = Infinity;
-    for(const t of trades){
-      const d = Math.abs(t[0]-r) + Math.abs(t[1]-c);
-      if(d < bestD){ bestD = d; best = t; }
-    }
-    if(best) spawnAgent('goods', [r,c], best);
-  }
-
-  if(state.tick % 10 === 0) save();
+  if(state.tick % DAY_LENGTH === 0) save();
 }
 
 // ========== 放置 / 拆除 ==========
@@ -541,6 +578,7 @@ function placeBuilding(r, c){
   if(state.money < b.cost){ toast('资金不足'); return; }
   state.money -= b.cost;
   state.cells[r][c] = { type: type };
+  initCellRuntime(state.cells[r][c]);
   save();
 }
 
@@ -549,7 +587,6 @@ function removeBuilding(r, c){
   if(!cell) return false;
   state.money += Math.floor(BUILDINGS[cell.type].cost / 2);
   state.cells[r][c] = null;
-  delete state.industryWorkers[r+','+c];
   save();
   return true;
 }
@@ -569,6 +606,15 @@ function roundRectPath(x, y, w, h, r){
 
 const PAD = 8;
 const CORNER = 10;
+
+function cellIsActive(cell){
+  if(!cell) return false;
+  switch(cell.type){
+    case 'house':    return true;
+    case 'industry': return (cell.workers || 0) > 0 && state.waterOK && state.powerOK;
+    default:         return (cell.workers || 0) > 0;
+  }
+}
 
 function render(){
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -623,14 +669,10 @@ function render(){
       const x = c*CELL + PAD;
       const y = r*CELL + PAD;
       const w = CELL - PAD*2;
-      const key = r+','+c;
-
-      const powered = b.powerNeed === 0 || state.cellPower.has(key);
-      const watered = b.waterNeed === 0 || state.cellWater.has(key);
-      const active = powered && watered;
+      const active = cellIsActive(cell);
 
       roundRectPath(x, y, w, w, CORNER);
-      ctx.globalAlpha = active ? 1 : 0.4;
+      ctx.globalAlpha = active ? 1 : 0.45;
       ctx.fillStyle = b.color;
       ctx.fill();
       ctx.globalAlpha = 1;
@@ -639,7 +681,7 @@ function render(){
       ctx.font = 'bold 20px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(b.short, x + w/2, y + w/2);
+      ctx.fillText(b.short, x + w/2, y + w/2 - 4);
 
       if(!active){
         ctx.fillStyle = '#ff5050';
@@ -647,13 +689,17 @@ function render(){
         ctx.fillText('!', x + w/2, y + 14);
       }
 
-      if(cell.type === 'industry'){
-        const wk = state.industryWorkers[key] || 0;
-        if(wk > 0){
-          ctx.fillStyle = '#fff';
-          ctx.font = 'bold 11px sans-serif';
-          ctx.fillText('👷' + wk, x + w/2, y + w - 10);
-        }
+      // 工人数 / 居民数
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px sans-serif';
+      if(cell.type === 'house'){
+        ctx.fillText('👤' + (cell.residents || 0), x + w/2, y + w - 9);
+      } else if(BUILDINGS[cell.type].workerCap > 0){
+        ctx.fillText('👷' + (cell.workers || 0) + '/' + BUILDINGS[cell.type].workerCap, x + w/2, y + w - 9);
+      }
+      if(cell.type === 'trade' && (cell.goodsQueue || 0) > 0){
+        ctx.fillStyle = '#ffd54f';
+        ctx.fillText('📦' + cell.goodsQueue, x + w/2, y + w - 21);
       }
     }
   }
@@ -671,7 +717,7 @@ function render(){
 
     ctx.beginPath();
     ctx.arc(px, py, AGENT_RADIUS, 0, Math.PI*2);
-    ctx.fillStyle = (a.kind === 'worker' || a.kind === 'workerHome') ? '#2ecc71' : '#e67e22';
+    ctx.fillStyle = a.kind === 'goods' ? '#e67e22' : '#2ecc71';
     ctx.fill();
   }
 }
@@ -679,26 +725,27 @@ function render(){
 // ========== UI 更新 ==========
 let lastUI = {};
 function updateUI(){
-  let pop = 0;
+  let pop = 0, goodsInTrades = 0;
   for(let r = 0; r < N; r++){
     for(let c = 0; c < N; c++){
       const cell = state.cells[r][c];
-      if(cell && cell.type === 'house'){
-        const key = r+','+c;
-        if(state.cellPower.has(key) && state.cellWater.has(key)) pop += 3;
-      }
+      if(!cell) continue;
+      if(cell.type === 'house') pop += cell.residents || 0;
+      else if(cell.type === 'trade') goodsInTrades += cell.goodsQueue || 0;
     }
   }
-  const goodsCount = state.agents.filter(a => a.kind === 'goods').length;
-  const day = Math.floor(state.tick / DAY_LENGTH) + 1;
-  const isM = isMorning();
+  const day = Math.floor(((state.tick === 0 ? 0 : state.tick - 1)) / DAY_LENGTH) + 1;
+  const isM = isMorningNow();
+
+  const powerStr = state.powerSupply.toFixed(1) + '/' + state.powerDemand.toFixed(1);
+  const waterStr = state.waterSupply.toFixed(1) + '/' + state.waterDemand.toFixed(1);
 
   const vals = {
     rMoney: Math.floor(state.money),
     rPop: pop,
-    rPower: state.cellPower.size,
-    rWater: state.cellWater.size,
-    rGoods: goodsCount,
+    rPower: powerStr,
+    rWater: waterStr,
+    rGoods: goodsInTrades,
     dayInfo: (isM ? '☀' : '🌙') + ' Day ' + day,
     tickInfo: 'tick ' + state.tick,
   };
@@ -709,6 +756,10 @@ function updateUI(){
       lastUI[k] = vals[k];
     }
   }
+  const pwEl = document.getElementById('rPower');
+  const wtEl = document.getElementById('rWater');
+  if(pwEl) pwEl.classList.toggle('bad', !state.powerOK);
+  if(wtEl) wtEl.classList.toggle('bad', !state.waterOK);
 }
 
 // ========== 输入 ==========
@@ -916,7 +967,7 @@ function newGame(){
   save();
   userInteracted = false;
   enterGame();
-  setTimeout(() => toast('先铺路，再建电厂/水厂/住宅/工业/贸易站'), 400);
+  setTimeout(() => toast('先铺路，再建水厂/电厂/住宅/工业/贸易站'), 400);
 }
 
 function continueGame(){
