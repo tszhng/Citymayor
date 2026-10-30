@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>迷你城市</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;background:#1e1e1e;color:#eee;
+  font-family:-apple-system,"PingFang HK","Microsoft YaHei",sans-serif;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
+#app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+#topbar{flex:0 0 auto;background:#2b2b2b;padding:6px 8px;font-size:13px;}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.row+.row{margin-top:6px;}
+button{background:#3a3a3a;color:#eee;border:1px solid #555;border-radius:6px;
+  padding:4px 8px;font-size:13px;cursor:pointer;font-family:inherit;}
+button.active{background:#4a90d9;border-color:#4a90d9;color:#fff;}
+.res{display:flex;gap:10px;flex-wrap:wrap;}
+.res span{white-space:nowrap;}
+.res b{margin-left:2px;color:#ffd54f;font-weight:600;}
+#tickInfo{color:#888;font-size:11px;}
+#canvasWrap{flex:1 1 auto;position:relative;overflow:hidden;}
+canvas{display:block;width:100%;height:100%;touch-action:none;}
+#toolbar{flex:0 0 auto;background:#2b2b2b;display:flex;gap:6px;padding:8px;
+  overflow-x:auto;-webkit-overflow-scrolling:touch;}
+#toolbar button{flex:0 0 auto;padding:8px 10px;font-size:12px;line-height:1.2;
+  text-align:center;min-width:56px;}
+#toolbar button small{display:block;color:#ffd54f;font-size:10px;margin-top:2px;}
+#toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,0.85);padding:10px 16px;border-radius:8px;font-size:14px;
+  opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;}
+#toast.show{opacity:1;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="row" id="timeRow">
+      <button data-speed="0">⏸ 暂停</button>
+      <button data-speed="1">▶ 1x</button>
+      <button data-speed="3">▶ 3x</button>
+      <span id="tickInfo"></span>
+    </div>
+    <div class="row res">
+      <span>💰<b id="rMoney">0</b></span>
+      <span>👥<b id="rPop">0</b></span>
+      <span>⚡<b id="rPower">0</b></span>
+      <span>💧<b id="rWater">0</b></span>
+      <span>📦<b id="rGoods">0</b></span>
+    </div>
+  </div>
+  <div id="canvasWrap">
+    <canvas id="game"></canvas>
+    <div id="toast"></div>
+  </div>
+  <div id="toolbar"></div>
+</div>
+<script>
+(function(){
+'use strict';
+
+// ---------- 常量 ----------
+const N = 10;            // 每边格数
+const CELL = 60;         // 每格世界坐标大小
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+const SAVE_KEY = 'minicity_v1';
+
+const BUILDINGS = {
+  road:       { name:'路',   short:'路', color:'#5a5a5a', cost:10  },
+  house:      { name:'住宅', short:'住', color:'#4a90d9', cost:100 },
+  industry:   { name:'工业', short:'工', color:'#8d6e63', cost:150 },
+  commercial: { name:'商业', short:'商', color:'#e6a23c', cost:120 },
+  power:      { name:'电厂', short:'电', color:'#e74c3c', cost:200 },
+  water:      { name:'水厂', short:'水', color:'#26c6da', cost:200 },
+  trade:      { name:'贸易', short:'贸', color:'#9b59b6', cost:250 },
+};
+const TOOLS = ['road','house','industry','commercial','power','water','trade','demolish'];
+
+// ---------- 状态 ----------
+const state = {
+  money: 1000,
+  population: 0,
+  electricity: 0,
+  water: 0,
+  goods: 0,
+  tick: 0,
+  speed: 1,
+  tool: 'road',
+  grid: Array.from({length:N}, () => Array(N).fill(null)),
+};
+
+// ---------- 存档 ----------
+function save(){
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch(e){}
+}
+function load(){
+  try {
+    const s = localStorage.getItem(SAVE_KEY);
+    if(!s) return;
+    const d = JSON.parse(s);
+    Object.assign(state, d);
+    if(!Array.isArray(state.grid) || state.grid.length !== N){
+      state.grid = Array.from({length:N}, () => Array(N).fill(null));
+    }
+  } catch(e){}
+}
+
+// ---------- Canvas / 视口 ----------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let scale = 1, offsetX = 0, offsetY = 0;
+let userInteracted = false;
+
+function fitView(){
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const total = N * CELL;
+  scale = Math.min(w/total, h/total) * 0.9;
+  offsetX = (w - total*scale) / 2;
+  offsetY = (h - total*scale) / 2;
+}
+function resize(){
+  const wrap = document.getElementById('canvasWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  canvas.width = Math.max(1, w*dpr);
+  canvas.height = Math.max(1, h*dpr);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  if(!userInteracted) fitView();
+}
+window.addEventListener('resize', resize);
+
+function zoomAt(cx, cy, factor){
+  const newScale = Math.max(0.3, Math.min(4, scale*factor));
+  const wx = (cx - offsetX) / scale;
+  const wy = (cy - offsetY) / scale;
+  scale = newScale;
+  offsetX = cx - wx*scale;
+  offsetY = cy - wy*scale;
+}
+
+// ---------- 游戏逻辑 ----------
+function hasRoad(r, c){
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  for(const [dr,dc] of dirs){
+    const nr = r+dr, nc = c+dc;
+    if(nr>=0 && nr<N && nc>=0 && nc<N){
+      const cell = state.grid[nr][nc];
+      if(cell && cell.type === 'road') return true;
+    }
+  }
+  return false;
+}
+
+function tick(){
+  state.tick++;
+  let houses=0, industries=0, commercials=0, powers=0, waters=0, trades=0;
+
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const cell = state.grid[r][c];
+      if(!cell || cell.type === 'road') continue;
+      if(!hasRoad(r,c)) continue;   // 不挨路 = 不工作
+      switch(cell.type){
+        case 'house': houses++; break;
+        case 'industry': industries++; break;
+        case 'commercial': commercials++; break;
+        case 'power': powers++; break;
+        case 'water': waters++; break;
+        case 'trade': trades++; break;
+      }
+    }
+  }
+
+  // 供需
+  const powerSupply = powers * 20;
+  const waterSupply = waters * 20;
+  const powerDemand = houses*1 + industries*2 + commercials*1 + trades*2;
+  const waterDemand = houses*1 + industries*2;
+  const powerRatio = powerDemand === 0 ? 1 : Math.min(1, powerSupply/powerDemand);
+  const waterRatio = waterDemand === 0 ? 1 : Math.min(1, waterSupply/waterDemand);
+
+  const workersNeeded = industries*10 + commercials*5 + trades*3;
+  const workerRatio = workersNeeded === 0 ? 1 : Math.min(1, state.population/workersNeeded);
+
+  // 人口：向"有效住宅容量"靠拢
+  const effHouses = houses * Math.min(powerRatio, waterRatio);
+  const targetPop = effHouses * 10;
+  state.population += (targetPop - state.population) * 0.15;
+  if(state.population < 0) state.population = 0;
+
+  // 工业产商品
+  const effIndustry = industries * Math.min(powerRatio, waterRatio, workerRatio);
+  let goodsPool = state.goods + effIndustry * 5;
+
+  // 贸易站先卖（赚得多）
+  const effTrade = trades * Math.min(powerRatio, workerRatio);
+  const tradeUse = Math.min(goodsPool, effTrade * 5);
+  goodsPool -= tradeUse;
+
+  // 商业再卖
+  const effCommercial = commercials * Math.min(powerRatio, workerRatio);
+  const commercialUse = Math.min(goodsPool, effCommercial * 3);
+  goodsPool -= commercialUse;
+
+  const income = tradeUse*15 + commercialUse*8;
+  const upkeep = powers*3 + waters*3 + trades*2;
+  state.money += income - upkeep;
+  state.goods = Math.max(0, goodsPool);
+
+  state.electricity = Math.round(powerSupply);
+  state.water = Math.round(waterSupply);
+
+  if(state.tick % 5 === 0) save();
+}
+
+function tryPlace(r, c){
+  if(state.tool === 'demolish'){
+    const cell = state.grid[r][c];
+    if(cell){
+      state.money += Math.floor(BUILDINGS[cell.type].cost / 2);
+      state.grid[r][c] = null;
+      save();
+    }
+    return;
+  }
+  if(state.grid[r][c]){ toast('这里已经有东西了'); return; }
+  const b = BUILDINGS[state.tool];
+  if(!b) return;
+  if(state.money < b.cost){ toast('资金不足'); return; }
+  state.money -= b.cost;
+  state.grid[r][c] = { type: state.tool };
+  save();
+}
+
+// ---------- 渲染 ----------
+function render(){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle = '#161616';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.setTransform(dpr*scale, 0, 0, dpr*scale, dpr*offsetX, dpr*offsetY);
+
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const cell = state.grid[r][c];
+      const x = c*CELL, y = r*CELL;
+      ctx.fillStyle = cell ? BUILDINGS[cell.type].color : '#333';
+      ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
+      if(cell){
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(BUILDINGS[cell.type].short, x + CELL/2, y + CELL/2);
+      }
+    }
+  }
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 1/scale;
+  for(let i=0;i<=N;i++){
+    ctx.beginPath(); ctx.moveTo(i*CELL, 0); ctx.lineTo(i*CELL, N*CELL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i*CELL); ctx.lineTo(N*CELL, i*CELL); ctx.stroke();
+  }
+}
+
+let lastUI = {};
+function updateUI(){
+  const vals = {
+    rMoney: Math.floor(state.money),
+    rPop:   Math.floor(state.population),
+    rPower: state.electricity,
+    rWater: state.water,
+    rGoods: Math.floor(state.goods),
+    tickInfo: 'tick ' + state.tick,
+  };
+  for(const k in vals){
+    if(lastUI[k] !== vals[k]){
+      document.getElementById(k).textContent = vals[k];
+      lastUI[k] = vals[k];
+    }
+  }
+}
+
+// ---------- 输入 ----------
+function handleTap(cssX, cssY){
+  const wx = (cssX - offsetX) / scale;
+  const wy = (cssY - offsetY) / scale;
+  const c = Math.floor(wx / CELL);
+  const r = Math.floor(wy / CELL);
+  if(r<0 || r>=N || c<0 || c>=N) return;
+  tryPlace(r, c);
+}
+
+const pointers = new Map();
+let lastDist = 0, dragStart = null, moved = false;
+
+function twoDist(){
+  const pts = [...pointers.values()];
+  return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  userInteracted = true;
+  for(const t of e.changedTouches) pointers.set(t.identifier, {x:t.clientX, y:t.clientY});
+  if(pointers.size === 1){
+    const p = [...pointers.values()][0];
+    dragStart = {x:p.x, y:p.y};
+    moved = false;
+  } else if(pointers.size === 2){
+    lastDist = twoDist();
+    moved = true;
+  }
+}, {passive:false});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(pointers.has(t.identifier)) pointers.set(t.identifier, {x:t.clientX, y:t.clientY});
+  }
+  if(pointers.size === 1 && dragStart){
+    const p = [...pointers.values()][0];
+    const dx = p.x - dragStart.x, dy = p.y - dragStart.y;
+    if(Math.hypot(dx,dy) > 8) moved = true;
+    if(moved){
+      offsetX += dx; offsetY += dy;
+      dragStart = {x:p.x, y:p.y};
+    }
+  } else if(pointers.size === 2){
+    const d = twoDist();
+    if(lastDist > 0){
+      const rect = canvas.getBoundingClientRect();
+      const pts = [...pointers.values()];
+      const cx = (pts[0].x + pts[1].x)/2 - rect.left;
+      const cy = (pts[0].y + pts[1].y)/2 - rect.top;
+      zoomAt(cx, cy, d/lastDist);
+    }
+    lastDist = d;
+  }
+}, {passive:false});
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for(const t of e.changedTouches) pointers.delete(t.identifier);
+  if(pointers.size === 0){
+    if(!moved && dragStart){
+      const rect = canvas.getBoundingClientRect();
+      handleTap(dragStart.x - rect.left, dragStart.y - rect.top);
+    }
+    dragStart = null; moved = false; lastDist = 0;
+  } else if(pointers.size === 1){
+    const p = [...pointers.values()][0];
+    dragStart = {x:p.x, y:p.y};
+    lastDist = 0;
+  }
+}, {passive:false});
+
+// 桌面鼠标（方便调试）
+canvas.addEventListener('mousedown', e => {
+  userInteracted = true;
+  dragStart = {x:e.clientX, y:e.clientY};
+  moved = false;
+});
+canvas.addEventListener('mousemove', e => {
+  if(!dragStart) return;
+  const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+  if(Math.hypot(dx,dy) > 8) moved = true;
+  if(moved){ offsetX += dx; offsetY += dy; dragStart = {x:e.clientX, y:e.clientY}; }
+});
+canvas.addEventListener('mouseup', e => {
+  if(!moved && dragStart){
+    const rect = canvas.getBoundingClientRect();
+    handleTap(e.clientX - rect.left, e.clientY - rect.top);
+  }
+  dragStart = null; moved = false;
+});
+
+// ---------- UI ----------
+let toastTimer;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1200);
+}
+
+const toolbar = document.getElementById('toolbar');
+function refreshToolbar(){
+  toolbar.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tool === state.tool);
+  });
+}
+function buildToolbar(){
+  toolbar.innerHTML = '';
+  for(const t of TOOLS){
+    const btn = document.createElement('button');
+    btn.dataset.tool = t;
+    if(t === 'demolish'){
+      btn.innerHTML = '拆除<small>&nbsp;</small>';
+    } else {
+      btn.innerHTML = BUILDINGS[t].name + '<small>$' + BUILDINGS[t].cost + '</small>';
+    }
+    btn.addEventListener('click', () => { state.tool = t; refreshToolbar(); });
+    toolbar.appendChild(btn);
+  }
+  refreshToolbar();
+}
+
+function buildTimeButtons(){
+  document.querySelectorAll('#timeRow button').forEach(b => {
+    b.addEventListener('click', () => {
+      state.speed = parseInt(b.dataset.speed, 10);
+      document.querySelectorAll('#timeRow button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+  const cur = document.querySelector('#timeRow button[data-speed="' + state.speed + '"]');
+  if(cur){
+    document.querySelectorAll('#timeRow button').forEach(x => x.classList.remove('active'));
+    cur.classList.add('active');
+  }
+}
+
+// ---------- 主循环 ----------
+let lastTime = performance.now();
+let acc = 0;
+function loop(now){
+  const dt = Math.min(now - lastTime, 100);
+  lastTime = now;
+  if(state.speed > 0){
+    acc += dt * state.speed;
+    let guard = 0;
+    while(acc >= 1000 && guard < 10){
+      acc -= 1000;
+      tick();
+      guard++;
+    }
+  }
+  render();
+  updateUI();
+  requestAnimationFrame(loop);
+}
+
+// ---------- 启动 ----------
+load();
+resize();
+buildToolbar();
+buildTimeButtons();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
