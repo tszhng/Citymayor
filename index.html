@@ -9,7 +9,10 @@
 html,body{height:100%;overflow:hidden;background:#1e1e1e;color:#eee;
   font-family:-apple-system,"PingFang HK","Microsoft YaHei",sans-serif;
   -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
-#app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
+#app{position:relative;height:100vh;height:100dvh;overflow:hidden;}
+
+/* ---------- 游戏画面 ---------- */
+#gameScreen{position:absolute;inset:0;display:flex;flex-direction:column;}
 #topbar{flex:0 0 auto;background:#2b2b2b;padding:6px 8px;font-size:13px;}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .row+.row{margin-top:6px;}
@@ -29,40 +32,100 @@ canvas{display:block;width:100%;height:100%;touch-action:none;}
 #toolbar button small{display:block;color:#ffd54f;font-size:10px;margin-top:2px;}
 #toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   background:rgba(0,0,0,0.85);padding:10px 16px;border-radius:8px;font-size:14px;
-  opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;}
+  opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:5;}
 #toast.show{opacity:1;}
+
+/* ---------- 通用菜单按钮 ---------- */
+.menu-btn{
+  width:240px;max-width:80vw;padding:14px 20px;font-size:16px;
+  background:#3a3a3a;color:#eee;border:1px solid #555;border-radius:10px;
+  cursor:pointer;font-family:inherit;transition:background .15s;
+}
+.menu-btn:active{background:#4a4a4a;}
+.menu-btn.primary{background:#4a90d9;border-color:#4a90d9;color:#fff;}
+.menu-btn.primary:active{background:#3a7ec0;}
+.menu-btn.danger{background:#8b3a3a;border-color:#a44;color:#fff;}
+.menu-btn.danger:active{background:#a14444;}
+.menu-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+/* ---------- 主菜单 ---------- */
+#menuScreen{
+  position:absolute;inset:0;z-index:20;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,#1a1a2e 0%,#16213e 60%,#0f3460 100%);
+  gap:14px;padding:24px;
+}
+#menuScreen h1{
+  font-size:34px;margin-bottom:20px;font-weight:700;letter-spacing:2px;
+  background:linear-gradient(90deg,#4a90d9,#e6a23c);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+#menuScreen .sub{color:#8899aa;font-size:12px;margin-top:20px;}
+
+/* ---------- 设置面板 ---------- */
+#settingsPanel{
+  position:absolute;inset:0;z-index:30;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.88);gap:12px;padding:24px;
+}
+#settingsPanel h2{font-size:24px;margin-bottom:20px;color:#fff;}
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="topbar">
-    <div class="row" id="timeRow">
-      <button data-speed="0">⏸ 暂停</button>
-      <button data-speed="1">▶ 1x</button>
-      <button data-speed="3">▶ 3x</button>
-      <span id="tickInfo"></span>
+
+  <!-- 游戏画面 -->
+  <div id="gameScreen">
+    <div id="topbar">
+      <div class="row" id="timeRow">
+        <button data-speed="0">⏸ 暂停</button>
+        <button data-speed="1">▶ 1x</button>
+        <button data-speed="3">▶ 3x</button>
+        <span id="tickInfo"></span>
+        <button id="btnOpenSettings" style="margin-left:auto">⚙ 设置</button>
+      </div>
+      <div class="row res">
+        <span>💰<b id="rMoney">0</b></span>
+        <span>👥<b id="rPop">0</b></span>
+        <span>⚡<b id="rPower">0</b></span>
+        <span>💧<b id="rWater">0</b></span>
+        <span>📦<b id="rGoods">0</b></span>
+      </div>
     </div>
-    <div class="row res">
-      <span>💰<b id="rMoney">0</b></span>
-      <span>👥<b id="rPop">0</b></span>
-      <span>⚡<b id="rPower">0</b></span>
-      <span>💧<b id="rWater">0</b></span>
-      <span>📦<b id="rGoods">0</b></span>
+    <div id="canvasWrap">
+      <canvas id="game"></canvas>
+      <div id="toast"></div>
     </div>
+    <div id="toolbar"></div>
   </div>
-  <div id="canvasWrap">
-    <canvas id="game"></canvas>
-    <div id="toast"></div>
+
+  <!-- 主菜单 -->
+  <div id="menuScreen">
+    <h1>🏙️ 迷你城市</h1>
+    <button class="menu-btn primary" id="btnNew">开始新游戏</button>
+    <button class="menu-btn" id="btnContinue" disabled>继续游戏</button>
+    <button class="menu-btn" id="btnMenuSettings">设置</button>
+    <div class="sub">v1.0 · 离线可玩 · 沙盒建造</div>
   </div>
-  <div id="toolbar"></div>
+
+  <!-- 设置面板 -->
+  <div id="settingsPanel" style="display:none;">
+    <h2>⚙ 设置</h2>
+    <button class="menu-btn primary" id="btnCloseSettings">继续游戏</button>
+    <button class="menu-btn" id="btnBackToMenu">保存并返回主菜单</button>
+    <button class="menu-btn danger" id="btnRestart">重新开始（清空存档）</button>
+    <button class="menu-btn danger" id="btnQuit">关闭游戏</button>
+  </div>
+
 </div>
 <script>
 (function(){
 'use strict';
 
 // ---------- 常量 ----------
-const N = 10;            // 每边格数
-const CELL = 60;         // 每格世界坐标大小
+const N = 10;
+const CELL = 60;
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
 const SAVE_KEY = 'minicity_v1';
 
@@ -90,7 +153,13 @@ const state = {
   grid: Array.from({length:N}, () => Array(N).fill(null)),
 };
 
+let screen = 'menu';        // 'menu' | 'game' | 'settings'
+let settingsFrom = 'menu';  // 从哪个页面进入设置
+
 // ---------- 存档 ----------
+function hasSave(){
+  try { return !!localStorage.getItem(SAVE_KEY); } catch(e){ return false; }
+}
 function save(){
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch(e){}
 }
@@ -114,6 +183,7 @@ let userInteracted = false;
 
 function fitView(){
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if(w <= 0 || h <= 0) return;
   const total = N * CELL;
   scale = Math.min(w/total, h/total) * 0.9;
   offsetX = (w - total*scale) / 2;
@@ -160,7 +230,7 @@ function tick(){
     for(let c=0;c<N;c++){
       const cell = state.grid[r][c];
       if(!cell || cell.type === 'road') continue;
-      if(!hasRoad(r,c)) continue;   // 不挨路 = 不工作
+      if(!hasRoad(r,c)) continue;
       switch(cell.type){
         case 'house': houses++; break;
         case 'industry': industries++; break;
@@ -172,7 +242,6 @@ function tick(){
     }
   }
 
-  // 供需
   const powerSupply = powers * 20;
   const waterSupply = waters * 20;
   const powerDemand = houses*1 + industries*2 + commercials*1 + trades*2;
@@ -183,22 +252,18 @@ function tick(){
   const workersNeeded = industries*10 + commercials*5 + trades*3;
   const workerRatio = workersNeeded === 0 ? 1 : Math.min(1, state.population/workersNeeded);
 
-  // 人口：向"有效住宅容量"靠拢
   const effHouses = houses * Math.min(powerRatio, waterRatio);
   const targetPop = effHouses * 10;
   state.population += (targetPop - state.population) * 0.15;
   if(state.population < 0) state.population = 0;
 
-  // 工业产商品
   const effIndustry = industries * Math.min(powerRatio, waterRatio, workerRatio);
   let goodsPool = state.goods + effIndustry * 5;
 
-  // 贸易站先卖（赚得多）
   const effTrade = trades * Math.min(powerRatio, workerRatio);
   const tradeUse = Math.min(goodsPool, effTrade * 5);
   goodsPool -= tradeUse;
 
-  // 商业再卖
   const effCommercial = commercials * Math.min(powerRatio, workerRatio);
   const commercialUse = Math.min(goodsPool, effCommercial * 3);
   goodsPool -= commercialUse;
@@ -277,7 +342,8 @@ function updateUI(){
   };
   for(const k in vals){
     if(lastUI[k] !== vals[k]){
-      document.getElementById(k).textContent = vals[k];
+      const el = document.getElementById(k);
+      if(el) el.textContent = vals[k];
       lastUI[k] = vals[k];
     }
   }
@@ -357,7 +423,6 @@ canvas.addEventListener('touchend', e => {
   }
 }, {passive:false});
 
-// 桌面鼠标（方便调试）
 canvas.addEventListener('mousedown', e => {
   userInteracted = true;
   dragStart = {x:e.clientX, y:e.clientY};
@@ -381,10 +446,11 @@ canvas.addEventListener('mouseup', e => {
 let toastTimer;
 function toast(msg){
   const el = document.getElementById('toast');
+  if(!el) return;
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 1200);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1400);
 }
 
 const toolbar = document.getElementById('toolbar');
@@ -410,19 +476,112 @@ function buildToolbar(){
 }
 
 function buildTimeButtons(){
-  document.querySelectorAll('#timeRow button').forEach(b => {
-    b.addEventListener('click', () => {
+  document.querySelectorAll('#timeRow button[data-speed]').forEach(b => {
+    b.onclick = () => {
       state.speed = parseInt(b.dataset.speed, 10);
-      document.querySelectorAll('#timeRow button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('#timeRow button[data-speed]').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
-    });
+    };
+    b.classList.toggle('active', parseInt(b.dataset.speed, 10) === state.speed);
   });
-  const cur = document.querySelector('#timeRow button[data-speed="' + state.speed + '"]');
-  if(cur){
-    document.querySelectorAll('#timeRow button').forEach(x => x.classList.remove('active'));
-    cur.classList.add('active');
+}
+
+// ---------- 页面切换 ----------
+function updateContinueButton(){
+  const btn = document.getElementById('btnContinue');
+  if(hasSave()){
+    btn.disabled = false;
+    btn.textContent = '继续游戏';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '继续游戏（无存档）';
   }
 }
+
+function updateSettingsUI(){
+  const fromGame = settingsFrom === 'game';
+  document.getElementById('btnCloseSettings').textContent = fromGame ? '继续游戏' : '关闭设置';
+  document.getElementById('btnBackToMenu').style.display = fromGame ? 'block' : 'none';
+  document.getElementById('btnRestart').style.display    = fromGame ? 'block' : 'none';
+  document.getElementById('btnQuit').style.display       = fromGame ? 'block' : 'none';
+}
+
+function showScreen(name){
+  screen = name;
+  document.getElementById('menuScreen').style.display   = (name==='menu')     ? 'flex' : 'none';
+  document.getElementById('gameScreen').style.display   = (name==='game')     ? 'flex' : 'none';
+  document.getElementById('settingsPanel').style.display= (name==='settings') ? 'flex' : 'none';
+
+  if(name === 'game'){
+    requestAnimationFrame(() => {
+      resize();
+      if(!userInteracted) fitView();
+    });
+  }
+  if(name === 'menu') updateContinueButton();
+  if(name === 'settings') updateSettingsUI();
+}
+
+// ---------- 游戏进入 ----------
+function enterGame(){
+  buildToolbar();
+  buildTimeButtons();
+  lastUI = {};
+  showScreen('game');
+}
+
+function newGame(){
+  state.money = 1000;
+  state.population = 0;
+  state.electricity = 0;
+  state.water = 0;
+  state.goods = 0;
+  state.tick = 0;
+  state.speed = 1;
+  state.tool = 'road';
+  state.grid = Array.from({length:N}, () => Array(N).fill(null));
+  save();
+  userInteracted = false;
+  enterGame();
+  setTimeout(() => toast('先铺路，建筑要挨着路才会工作'), 400);
+}
+
+function continueGame(){
+  load();
+  userInteracted = false;
+  enterGame();
+}
+
+// ---------- 事件绑定 ----------
+document.getElementById('btnNew').onclick = newGame;
+document.getElementById('btnContinue').onclick = continueGame;
+document.getElementById('btnMenuSettings').onclick = () => {
+  settingsFrom = 'menu';
+  showScreen('settings');
+};
+document.getElementById('btnOpenSettings').onclick = () => {
+  settingsFrom = 'game';
+  showScreen('settings');
+};
+document.getElementById('btnCloseSettings').onclick = () => {
+  showScreen(settingsFrom === 'game' ? 'game' : 'menu');
+};
+document.getElementById('btnBackToMenu').onclick = () => {
+  save();
+  showScreen('menu');
+};
+document.getElementById('btnRestart').onclick = () => {
+  if(confirm('确定要重新开始吗？当前进度将被清空。')){
+    newGame();
+  }
+};
+document.getElementById('btnQuit').onclick = () => {
+  if(!confirm('确定要关闭游戏吗？进度会自动保存。')) return;
+  save();
+  try { window.close(); } catch(e){}
+  // 大多数浏览器不允许脚本关闭页面，兜底回主菜单
+  showScreen('menu');
+};
 
 // ---------- 主循环 ----------
 let lastTime = performance.now();
@@ -430,25 +589,25 @@ let acc = 0;
 function loop(now){
   const dt = Math.min(now - lastTime, 100);
   lastTime = now;
-  if(state.speed > 0){
-    acc += dt * state.speed;
-    let guard = 0;
-    while(acc >= 1000 && guard < 10){
-      acc -= 1000;
-      tick();
-      guard++;
+  if(screen === 'game'){
+    if(state.speed > 0){
+      acc += dt * state.speed;
+      let guard = 0;
+      while(acc >= 1000 && guard < 10){
+        acc -= 1000;
+        tick();
+        guard++;
+      }
     }
+    render();
+    updateUI();
   }
-  render();
-  updateUI();
   requestAnimationFrame(loop);
 }
 
 // ---------- 启动 ----------
-load();
-resize();
-buildToolbar();
-buildTimeButtons();
+updateContinueButton();
+showScreen('menu');
 requestAnimationFrame(loop);
 
 })();
